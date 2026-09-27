@@ -190,7 +190,10 @@ class NetworkAccelerationService:
         from app.network.operations import NetworkOperationsService
         maintenance = NetworkOperationsService(self.connection, self.clock).blocks_new_session(incident["scenario_id"], incident["segment_id"], now)
         if maintenance is not None:
-            raise ConflictError("当前场景处于维护窗口，不能启动新的加速会话", context={"maintenance_code": maintenance["code"]})
+            raise ConflictError(
+                "当前场景处于维护窗口，不能启动新的加速会话",
+                context={"maintenance_code": maintenance["code"], "drain_mode": maintenance["drain_mode"]},
+            )
         limit = int(segment["capacity_mbps"] if segment else scenario["capacity_mbps"])
         used = self.repository.active_capacity(incident["scenario_id"], incident["segment_id"])
         if used["sessions"] >= int(scenario["max_concurrent_sessions"]):
@@ -226,6 +229,8 @@ class NetworkAccelerationService:
             connection.execute("UPDATE capacity_reservations SET state='released',released_at=? WHERE session_id=? AND state='held'", (now, session_id))
             incident_state = "resolved" if result == "completed" else "open"
             connection.execute("UPDATE quality_incidents SET state=?,resolved_at=?,version=version+1 WHERE id=?", (incident_state, now if result == "completed" else None, session["incident_id"]))
+            from app.network.operations import sync_session_drain_outcome
+            sync_session_drain_outcome(connection, session_id, now)
             self._event(connection, session_id, result, actor, {"reason": reason}, now)
             return NetworkRepository(connection).session_detail(session_id)
 
@@ -241,6 +246,8 @@ class NetworkAccelerationService:
                 connection.execute("UPDATE acceleration_sessions SET status='expired',ended_at=?,end_reason='duration_elapsed',version=version+1 WHERE id=?", (now, row["id"]))
                 connection.execute("UPDATE capacity_reservations SET state='released',released_at=? WHERE session_id=? AND state='held'", (now, row["id"]))
                 connection.execute("UPDATE quality_incidents SET state='open',version=version+1 WHERE id=?", (session["incident_id"],))
+                from app.network.operations import sync_session_drain_outcome
+                sync_session_drain_outcome(connection, row["id"], now)
                 self._event(connection, row["id"], "expired", actor, {}, now)
                 expired.append(row["id"])
         return {"expired": expired}

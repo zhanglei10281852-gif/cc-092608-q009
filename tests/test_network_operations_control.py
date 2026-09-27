@@ -102,7 +102,7 @@ def test_maintenance_blocks_acceleration(client):
     policy = prepare(client)
     client.post(
         "/api/network/entitlements",
-        json={"subscriber_hash": "subscriber-maintenance-01", "scenario_code": "venue-01", "product_code": "venue-boost", "valid_from": "2026-09-26T00:00:00Z", "valid_until": "2026-09-27T00:00:00Z", "source_order_id": "maintenance-order"},
+        json={"subscriber_hash": "subscriber-maintenance-01", "scenario_code": "venue-01", "product_code": "venue-boost", "valid_from": "2026-09-26T00:00:00Z", "valid_until": "2036-09-27T00:00:00Z", "source_order_id": "maintenance-order"},
     )
     sample = client.post(
         "/api/network/samples",

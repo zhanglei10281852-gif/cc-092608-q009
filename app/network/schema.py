@@ -2,6 +2,43 @@ from __future__ import annotations
 
 import sqlite3
 
+MAINTENANCE_WINDOWS_DDL = r'''
+CREATE TABLE IF NOT EXISTS maintenance_windows (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scenario_id INTEGER NOT NULL REFERENCES network_scenarios(id),
+    segment_id INTEGER REFERENCES network_segments(id),
+    code TEXT NOT NULL UNIQUE,
+    reason TEXT NOT NULL,
+    starts_at TEXT NOT NULL,
+    ends_at TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'scheduled' CHECK(state IN ('scheduled','draining','active','completed','cancelled')),
+    drain_mode TEXT NOT NULL DEFAULT 'finish_active' CHECK(drain_mode IN ('finish_active','cancel_active','block_new')),
+    grace_period_seconds INTEGER NOT NULL DEFAULT 300 CHECK(grace_period_seconds >= 0),
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+'''
+
+MAINTENANCE_DRAIN_SESSIONS_DDL = r'''
+CREATE TABLE IF NOT EXISTS maintenance_drain_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    window_id INTEGER NOT NULL REFERENCES maintenance_windows(id) ON DELETE CASCADE,
+    session_id INTEGER NOT NULL REFERENCES acceleration_sessions(id),
+    action TEXT NOT NULL CHECK(action IN ('wait','migrate','cancel')),
+    result TEXT NOT NULL DEFAULT 'pending' CHECK(result IN ('pending','completed','expired','cancelled','migrated','kept')),
+    deadline_at TEXT NOT NULL,
+    target_segment_id INTEGER REFERENCES network_segments(id),
+    overridden_by TEXT,
+    override_reason TEXT,
+    overridden_at TEXT,
+    resolved_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(window_id, session_id)
+);
+'''
+
 NETWORK_SCHEMA = r'''
 CREATE TABLE IF NOT EXISTS network_scenarios (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,7 +82,7 @@ CREATE TABLE IF NOT EXISTS application_profiles (
 );
 CREATE TABLE IF NOT EXISTS policy_versions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    scenario_id INTEGER NOT NULL REFERENCES network_scenarios(id) ON DELETE CASCADE,
+    scenario_id INTEGER NOT NULL REFERENCES network_scenarios(id),
     version_no INTEGER NOT NULL,
     state TEXT NOT NULL DEFAULT 'draft' CHECK(state IN ('draft','published','retired')),
     rules_json TEXT NOT NULL,
@@ -174,21 +211,10 @@ CREATE TABLE IF NOT EXISTS rollout_targets (
     UNIQUE(campaign_id,segment_id,cohort_key)
 );
 CREATE INDEX IF NOT EXISTS idx_rollout_targets_state ON rollout_targets(campaign_id,state,id);
-CREATE TABLE IF NOT EXISTS maintenance_windows (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    scenario_id INTEGER NOT NULL REFERENCES network_scenarios(id),
-    segment_id INTEGER REFERENCES network_segments(id),
-    code TEXT NOT NULL UNIQUE,
-    reason TEXT NOT NULL,
-    starts_at TEXT NOT NULL,
-    ends_at TEXT NOT NULL,
-    state TEXT NOT NULL DEFAULT 'scheduled' CHECK(state IN ('scheduled','active','completed','cancelled')),
-    drain_mode TEXT NOT NULL DEFAULT 'finish_active' CHECK(drain_mode IN ('finish_active','cancel_active','block_new')),
-    created_by TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
+''' + MAINTENANCE_WINDOWS_DDL + MAINTENANCE_DRAIN_SESSIONS_DDL + r'''
 CREATE INDEX IF NOT EXISTS idx_maintenance_active ON maintenance_windows(scenario_id,segment_id,state,starts_at,ends_at);
+CREATE INDEX IF NOT EXISTS idx_drain_sessions_window ON maintenance_drain_sessions(window_id,result);
+CREATE INDEX IF NOT EXISTS idx_drain_sessions_session ON maintenance_drain_sessions(session_id,result);
 CREATE TABLE IF NOT EXISTS operation_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     resource_type TEXT NOT NULL,
@@ -202,5 +228,39 @@ CREATE INDEX IF NOT EXISTS idx_operation_events_resource ON operation_events(res
 '''
 
 
+def _migrate_maintenance_windows(connection: sqlite3.Connection) -> None:
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='maintenance_windows'",
+    ).fetchone()
+    if row is None:
+        return
+    sql = str(row[0] or "")
+    if "'draining'" in sql:
+        columns = {entry[1] for entry in connection.execute("PRAGMA table_info(maintenance_windows)").fetchall()}
+        if "grace_period_seconds" not in columns:
+            connection.execute(
+                "ALTER TABLE maintenance_windows ADD COLUMN grace_period_seconds INTEGER NOT NULL DEFAULT 300",
+            )
+        return
+    owns_transaction = not connection.in_transaction
+    if owns_transaction:
+        connection.execute("BEGIN IMMEDIATE")
+    try:
+        connection.execute("ALTER TABLE maintenance_windows RENAME TO maintenance_windows_legacy")
+        connection.execute(MAINTENANCE_WINDOWS_DDL)
+        connection.execute(
+            "INSERT INTO maintenance_windows(id,scenario_id,segment_id,code,reason,starts_at,ends_at,state,drain_mode,created_by,created_at,updated_at) "
+            "SELECT id,scenario_id,segment_id,code,reason,starts_at,ends_at,state,drain_mode,created_by,created_at,updated_at FROM maintenance_windows_legacy",
+        )
+        connection.execute("DROP TABLE maintenance_windows_legacy")
+    except Exception:
+        if owns_transaction:
+            connection.execute("ROLLBACK")
+        raise
+    if owns_transaction:
+        connection.execute("COMMIT")
+
+
 def ensure_network_schema(connection: sqlite3.Connection) -> None:
+    _migrate_maintenance_windows(connection)
     connection.executescript(NETWORK_SCHEMA)

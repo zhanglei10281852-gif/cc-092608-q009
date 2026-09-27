@@ -44,9 +44,16 @@ class MaintenanceCreate(BaseModel):
     starts_at: str
     ends_at: str
     drain_mode: Literal["finish_active", "cancel_active", "block_new"] = "finish_active"
+    grace_period_seconds: int = Field(default=300, ge=0, le=86_400)
     actor: str = Field(min_length=1, max_length=120)
 
 
 class MaintenanceAction(BaseModel):
     actor: str = Field(min_length=1, max_length=120)
+    reason: str = Field(min_length=2, max_length=500)
+
+
+class MaintenanceSessionOverride(BaseModel):
+    actor: str = Field(min_length=1, max_length=120)
+    action: Literal["wait", "migrate", "cancel"]
     reason: str = Field(min_length=2, max_length=500)
