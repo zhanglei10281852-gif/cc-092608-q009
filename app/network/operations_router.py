@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Query
 
 from app.network.operations import NetworkOperationsService
-from app.network.operations_schemas import CampaignAction, MaintenanceAction, MaintenanceCreate, RolloutCampaignCreate
+from app.network.operations_schemas import CampaignAction, MaintenanceCreate, MaintenanceOverride, RolloutCampaignCreate
 
 router = APIRouter(prefix="/api/network/operations", tags=["网络发布与维护"])
 
@@ -50,6 +50,16 @@ def create_maintenance(payload: MaintenanceCreate):
 @router.get("/maintenance/{window_id}")
 def maintenance_detail(window_id: int):
     return service().maintenance_detail(window_id)
+
+
+@router.get("/maintenance/{window_id}/drain")
+def maintenance_drain(window_id: int):
+    return service().drain_status(window_id)
+
+
+@router.post("/maintenance/{window_id}/sessions/{session_id}/override")
+def override_maintenance_session(window_id: int, session_id: int, payload: MaintenanceOverride):
+    return service().override_session(window_id, session_id, payload.action, payload.actor, payload.reason)
 
 
 @router.post("/maintenance/advance")

@@ -61,7 +61,7 @@ def command_network_demo() -> int:
                 "scenario_code": "gdh-rail",
                 "product_code": "rail-boost-day",
                 "valid_from": "2026-09-26T00:00:00Z",
-                "valid_until": "2026-09-27T00:00:00Z",
+                "valid_until": "2030-01-01T00:00:00Z",
                 "source_order_id": "demo-order-000001",
             },
         )

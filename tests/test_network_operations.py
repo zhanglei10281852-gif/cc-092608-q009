@@ -112,7 +112,7 @@ def test_acceleration_requires_entitlement_and_releases_capacity(client):
             "scenario_code": "gdh-rail",
             "product_code": "rail-boost-day",
             "valid_from": "2026-09-26T00:00:00Z",
-            "valid_until": "2026-09-27T00:00:00Z",
+            "valid_until": "2030-01-01T00:00:00Z",
             "source_order_id": "order-000001",
         },
     )
@@ -141,7 +141,7 @@ def test_expired_session_reopens_incident_with_fixed_clock(client):
             "scenario_code": "gdh-rail",
             "product_code": "rail-boost-day",
             "valid_from": "2026-09-26T00:00:00Z",
-            "valid_until": "2026-09-27T00:00:00Z",
+            "valid_until": "2030-01-01T00:00:00Z",
             "source_order_id": "order-000002",
         },
     )
@@ -172,7 +172,7 @@ def test_capacity_limit_rejects_second_session(client):
                 "scenario_code": "gdh-rail",
                 "product_code": "rail-boost-day",
                 "valid_from": "2026-09-26T00:00:00Z",
-                "valid_until": "2026-09-27T00:00:00Z",
+                "valid_until": "2030-01-01T00:00:00Z",
                 "source_order_id": f"order-capacity-{index:03d}",
             },
         )

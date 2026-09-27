@@ -2,7 +2,26 @@ from __future__ import annotations
 
 import sqlite3
 
-NETWORK_SCHEMA = r'''
+MAINTENANCE_WINDOWS_COLUMNS = """
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scenario_id INTEGER NOT NULL REFERENCES network_scenarios(id),
+    segment_id INTEGER REFERENCES network_segments(id),
+    code TEXT NOT NULL UNIQUE,
+    reason TEXT NOT NULL,
+    starts_at TEXT NOT NULL,
+    ends_at TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'scheduled' CHECK(state IN ('scheduled','draining','active','completed','cancelled')),
+    drain_mode TEXT NOT NULL DEFAULT 'finish_active' CHECK(drain_mode IN ('finish_active','cancel_active','block_new')),
+    grace_period_seconds INTEGER NOT NULL DEFAULT 300 CHECK(grace_period_seconds >= 0),
+    drain_started_at TEXT,
+    activated_at TEXT,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+"""
+
+NETWORK_SCHEMA = (
+    r'''
 CREATE TABLE IF NOT EXISTS network_scenarios (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     code TEXT NOT NULL UNIQUE,
@@ -174,21 +193,26 @@ CREATE TABLE IF NOT EXISTS rollout_targets (
     UNIQUE(campaign_id,segment_id,cohort_key)
 );
 CREATE INDEX IF NOT EXISTS idx_rollout_targets_state ON rollout_targets(campaign_id,state,id);
-CREATE TABLE IF NOT EXISTS maintenance_windows (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    scenario_id INTEGER NOT NULL REFERENCES network_scenarios(id),
-    segment_id INTEGER REFERENCES network_segments(id),
-    code TEXT NOT NULL UNIQUE,
-    reason TEXT NOT NULL,
-    starts_at TEXT NOT NULL,
-    ends_at TEXT NOT NULL,
-    state TEXT NOT NULL DEFAULT 'scheduled' CHECK(state IN ('scheduled','active','completed','cancelled')),
-    drain_mode TEXT NOT NULL DEFAULT 'finish_active' CHECK(drain_mode IN ('finish_active','cancel_active','block_new')),
-    created_by TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
+'''
+    + f"CREATE TABLE IF NOT EXISTS maintenance_windows ({MAINTENANCE_WINDOWS_COLUMNS});"
+    + r'''
 CREATE INDEX IF NOT EXISTS idx_maintenance_active ON maintenance_windows(scenario_id,segment_id,state,starts_at,ends_at);
+CREATE TABLE IF NOT EXISTS maintenance_session_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    window_id INTEGER NOT NULL REFERENCES maintenance_windows(id) ON DELETE CASCADE,
+    session_id INTEGER NOT NULL REFERENCES acceleration_sessions(id),
+    action TEXT NOT NULL DEFAULT 'awaiting' CHECK(action IN ('awaiting','migrated','cancelled','completed','expired','exempted')),
+    deadline_at TEXT,
+    from_segment_id INTEGER REFERENCES network_segments(id),
+    to_segment_id INTEGER REFERENCES network_segments(id),
+    manual INTEGER NOT NULL DEFAULT 0 CHECK(manual IN (0,1)),
+    actor TEXT NOT NULL DEFAULT '',
+    reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    resolved_at TEXT,
+    UNIQUE(window_id, session_id)
+);
+CREATE INDEX IF NOT EXISTS idx_maintenance_actions_window ON maintenance_session_actions(window_id,action);
 CREATE TABLE IF NOT EXISTS operation_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     resource_type TEXT NOT NULL,
@@ -200,7 +224,24 @@ CREATE TABLE IF NOT EXISTS operation_events (
 );
 CREATE INDEX IF NOT EXISTS idx_operation_events_resource ON operation_events(resource_type,resource_id,id);
 '''
+)
+
+MAINTENANCE_WINDOWS_MIGRATION = (
+    f"CREATE TABLE maintenance_windows_new ({MAINTENANCE_WINDOWS_COLUMNS});"
+    + r'''
+INSERT INTO maintenance_windows_new(id,scenario_id,segment_id,code,reason,starts_at,ends_at,state,drain_mode,created_by,created_at,updated_at)
+SELECT id,scenario_id,segment_id,code,reason,starts_at,ends_at,state,drain_mode,created_by,created_at,updated_at FROM maintenance_windows;
+DROP TABLE maintenance_windows;
+ALTER TABLE maintenance_windows_new RENAME TO maintenance_windows;
+CREATE INDEX IF NOT EXISTS idx_maintenance_active ON maintenance_windows(scenario_id,segment_id,state,starts_at,ends_at);
+'''
+)
 
 
 def ensure_network_schema(connection: sqlite3.Connection) -> None:
     connection.executescript(NETWORK_SCHEMA)
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='maintenance_windows'",
+    ).fetchone()
+    if row is not None and "'draining'" not in str(row[0]):
+        connection.executescript(MAINTENANCE_WINDOWS_MIGRATION)
